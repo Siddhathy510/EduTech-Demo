@@ -15,17 +15,26 @@ const state = {
   ],
   blockchain: [],
   activePanel: 'overview',
-  charts: {}
+  charts: {},
+  refreshTimer: null,
+  notice: ''
 };
+
+function stopRealtime() {
+  if (state.refreshTimer) {
+    clearInterval(state.refreshTimer);
+    state.refreshTimer = null;
+  }
+}
 
 function hashRecord(payload) {
   const json = JSON.stringify(payload);
-  let hash = 0;
+  let hash = 2166136261;
   for (let i = 0; i < json.length; i += 1) {
-    hash = (hash << 5) - hash + json.charCodeAt(i);
-    hash |= 0;
+    hash ^= json.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
   }
-  return `BLK-${Math.abs(hash).toString(16).padStart(8, '0')}`;
+  return `BLK-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 function predictRisk({ attendance, internalMarks, assignmentScore }) {
@@ -76,6 +85,7 @@ function riskSplit() {
 }
 
 function render() {
+  stopRealtime();
   if (!state.activeUser) {
     renderLogin();
     return;
@@ -114,8 +124,8 @@ function renderLogin() {
   document.getElementById('loginForm').addEventListener('submit', (event) => {
     event.preventDefault();
     const form = new FormData(event.target);
-    const username = form.get('username').trim().toLowerCase();
-    const password = form.get('password').trim();
+    const username = String(form.get('username')).trim().toLowerCase();
+    const password = String(form.get('password')).trim();
     const found = users[username];
 
     if (!found || found.password !== password) {
@@ -125,6 +135,7 @@ function renderLogin() {
 
     state.activeUser = found;
     state.activePanel = 'overview';
+    state.notice = '';
     render();
   });
 }
@@ -181,7 +192,7 @@ function adminView() {
     .join('');
 
   const ledger = state.blockchain
-    .slice(0, 6)
+    .slice(0, 8)
     .map((b) => `<tr><td>#${b.blockNumber}</td><td>${b.timestamp}</td><td>${b.hash}</td></tr>`)
     .join('');
 
@@ -224,6 +235,7 @@ function adminView() {
           <input name="assignment" type="number" min="0" max="100" placeholder="Assignment Score" required />
           <button class="primary-btn" type="submit">Add & Anchor to Blockchain</button>
         </form>
+        ${state.notice ? `<p class="muted" style="margin-top:10px; color:#4f8e5a;">${state.notice}</p>` : ''}
       </article>
       <article class="panel">
         <h3>Risk Distribution</h3>
@@ -339,6 +351,7 @@ function renderDashboard() {
 
   document.getElementById('logoutBtn').addEventListener('click', () => {
     state.activeUser = null;
+    state.notice = '';
     render();
   });
 
@@ -348,23 +361,37 @@ function renderDashboard() {
       event.preventDefault();
       const formData = new FormData(form);
       const student = {
-        id: String(formData.get('id')).trim(),
+        id: String(formData.get('id')).trim().toUpperCase(),
         name: String(formData.get('name')).trim(),
         attendance: Number(formData.get('attendance')),
         internalMarks: Number(formData.get('internal')),
         assignmentScore: Number(formData.get('assignment'))
       };
+
+      const duplicateId = state.students.some((s) => s.id === student.id);
+      const values = [student.attendance, student.internalMarks, student.assignmentScore];
+      const invalidRange = values.some((v) => Number.isNaN(v) || v < 0 || v > 100);
+
+      if (!student.id || !student.name || duplicateId || invalidRange) {
+        state.notice = duplicateId
+          ? 'Student ID already exists. Please use a unique ID.'
+          : 'Please enter valid values (0-100) and required fields.';
+        render();
+        return;
+      }
+
       state.students.unshift(student);
       addBlock(student);
+      state.notice = `Record for ${student.name} added and anchored in block #${state.blockchain[0].blockNumber}.`;
       render();
     });
 
     drawRiskPie();
   }
 
-  if (role === 'faculty') {
+  if (role === 'faculty' && state.activePanel === 'analytics') {
     drawFacultyCharts();
-    setTimeout(drawFacultyCharts, 2500);
+    state.refreshTimer = setInterval(drawFacultyCharts, 4000);
   }
 
   if (role === 'student') {
